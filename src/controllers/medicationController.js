@@ -1,4 +1,5 @@
-// Pharmacy Barcode & Medication Management Controller
+// Pharmacy Barcode & Extended Medication Management Controller
+const db = require('../config/db');
 
 // Pharmacy Barcode Registry Database (SFDA & Pharmacy API Mock)
 const pharmacyBarcodeDB = new Map([
@@ -37,9 +38,6 @@ const pharmacyBarcodeDB = new Map([
   ]
 ]);
 
-// Per-User Dynamic Medication Schedule Database (Keyed by Google ID / Patient ID)
-const userMedicationsDB = new Map();
-
 /**
  * Lookup medication details by Pharmacy Barcode
  */
@@ -53,7 +51,6 @@ function lookupBarcode(req, res) {
   const medData = pharmacyBarcodeDB.get(cleanCode);
 
   if (!medData) {
-    // Dynamic fallback for non-registered barcode for testing
     return res.json({
       success: true,
       found: false,
@@ -76,25 +73,15 @@ function lookupBarcode(req, res) {
 }
 
 /**
- * Get all active medications for a Google user
+ * Get all active medications for a Google user from DB
  */
-function getUserMedications(req, res) {
+async function getUserMedications(req, res) {
   const { userId } = req.params;
   if (!userId) {
     return res.status(400).json({ success: false, message: 'معرف المستخدم مطلوب.' });
   }
 
-  const medications = userMedicationsDB.get(userId) || [
-    // Default initial prescribed medicine if none added yet
-    {
-      id: 'med-default-1',
-      barcode: '6281001234567',
-      name: 'كابوتين 25mg (Capoten)',
-      dosage: 'جرعة واحدة 08:00 صباحاً',
-      time: '08:00 AM',
-      category: 'دواء الضغط'
-    }
-  ];
+  const medications = await db.getUserMedications(userId);
 
   return res.json({
     success: true,
@@ -104,33 +91,36 @@ function getUserMedications(req, res) {
 }
 
 /**
- * Add a new medication via barcode scan to user schedule
+ * Add a new medication with Extended Duration and Previous History to DB
  */
-function addMedication(req, res) {
-  const { userId, barcode, name, dosage, time } = req.body;
+async function addMedication(req, res) {
+  const { userId, barcode, name, dosage, time, treatmentDuration, dailySchedule, previousHistory } = req.body;
 
   if (!userId || !name) {
     return res.status(400).json({ success: false, message: 'بيانات الدواء غير مكتملة.' });
   }
 
-  const userMeds = userMedicationsDB.get(userId) || [];
   const newMed = {
     id: `med-${Date.now()}`,
     barcode: barcode || 'N/A',
     name,
     dosage: dosage || 'جرعة يومية واحدة',
-    time: time || '08:00 AM',
+    treatmentDuration: treatmentDuration || { isChronic: true, totalDays: null },
+    dailySchedule: dailySchedule || [time || '08:00 AM'],
+    previousHistory: previousHistory || {
+      isFirstTime: true,
+      startDate: new Date().toISOString().split('T')[0],
+      previousDosesCount: 0
+    },
     addedAt: new Date().toISOString()
   };
 
-  userMeds.push(newMed);
-  userMedicationsDB.set(userId, userMeds);
+  const savedMed = await db.saveMedication(userId, newMed);
 
   return res.json({
     success: true,
-    message: `تمت إضافة دواء (${name}) بنجاح لقائمة أدوية الحساب.`,
-    medication: newMed,
-    totalMedications: userMeds.length
+    message: `تمت إضافة دواء (${name}) بنجاح وحفظه في السحاب.`,
+    medication: savedMed
   });
 }
 

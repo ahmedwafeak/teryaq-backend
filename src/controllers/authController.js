@@ -1,4 +1,5 @@
 // Auth Controller for Restricted Access & Google Authentication
+const db = require('../config/db');
 
 const validInviteCodes = new Map([
   ['TRQ-MOTHER', { patientName: 'والدتي العزيزة', patientId: 'p-mother', medication: 'دواء الضغط (كابوتين 25mg)', caregiverPhone: '+201000000000' }],
@@ -7,13 +8,12 @@ const validInviteCodes = new Map([
   ['TRQ-7788', { patientName: 'أحمد محمود', patientId: 'p-101', medication: 'كابوتين 25mg', caregiverPhone: '+201000000000' }]
 ]);
 
-const googleUsersDB = new Map();
 const registeredDevices = new Map();
 
 /**
- * Google Account Authentication & Profile Setup
+ * Google Account Authentication & Persistent DB Setup
  */
-function googleAuth(req, res) {
+async function googleAuth(req, res) {
   const { email, displayName, photoUrl, googleId } = req.body;
 
   if (!email) {
@@ -21,7 +21,7 @@ function googleAuth(req, res) {
   }
 
   const patientId = `g-user-${googleId || Buffer.from(email).toString('hex').substring(0, 10)}`;
-  let userProfile = googleUsersDB.get(patientId);
+  let userProfile = await db.getUser(patientId);
 
   if (!userProfile) {
     userProfile = {
@@ -33,7 +33,7 @@ function googleAuth(req, res) {
       caregiverPhone: '+966500000000',
       createdAt: new Date().toISOString()
     };
-    googleUsersDB.set(patientId, userProfile);
+    await db.saveUser(userProfile);
   }
 
   return res.json({
@@ -60,7 +60,6 @@ function validateInvite(req, res) {
     return res.status(401).json({ success: false, message: 'كود الدعوة غير صحيح أو منتهي الصلاحية.' });
   }
 
-  // Check device binding
   if (registeredDevices.has(codeData.patientId)) {
     const boundDevice = registeredDevices.get(codeData.patientId);
     if (boundDevice !== deviceUuid) {

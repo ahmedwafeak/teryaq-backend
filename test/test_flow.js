@@ -36,7 +36,7 @@ function makeRequest(method, path, body = null) {
 }
 
 async function runTestFlow() {
-  console.log('🧪 [TEST SUITE] Starting Teryaq API, Google Auth & Barcode Scanner Verification...\n');
+  console.log('🧪 [TEST SUITE] Starting Teryaq Extended Medication & History Verification...\n');
   const server = app.listen(PORT);
 
   try {
@@ -51,25 +51,32 @@ async function runTestFlow() {
     if (!googleRes.body.success) throw new Error('Google Auth failed');
     const userId = googleRes.body.user.patientId;
 
-    // 2. Pharmacy Barcode Lookup & Medication Addition
+    // 2. Pharmacy Barcode Lookup & Extended Medication Addition
     console.log('\n2️⃣ Testing Pharmacy Barcode Lookup (6281001234567)...');
     const barcodeRes = await makeRequest('GET', '/medication/barcode/6281001234567');
     console.log('Barcode Lookup Result:', barcodeRes.body);
     if (!barcodeRes.body.found) throw new Error('Barcode lookup failed');
 
-    console.log('\n3️⃣ Adding Medication via Barcode Scan to Patient Schedule...');
+    console.log('\n3️⃣ Adding Medication with Duration & Previous History...');
     const addMedRes = await makeRequest('POST', '/medication/add', {
       userId,
       barcode: barcodeRes.body.medication.barcode,
       name: barcodeRes.body.medication.name,
       dosage: barcodeRes.body.medication.dosage,
-      time: '08:00 AM'
+      time: '08:00 AM',
+      treatmentDuration: { isChronic: false, totalDays: 14 },
+      dailySchedule: ['08:00 AM', '08:00 PM'],
+      previousHistory: {
+        isFirstTime: false,
+        startDate: '2026-08-01',
+        previousDosesCount: 20
+      }
     });
-    console.log('Add Medication Response:', addMedRes.body);
+    console.log('Add Extended Medication Response:', addMedRes.body);
 
     console.log('\n4️⃣ Fetching Patient Medications Schedule...');
     const userMedsRes = await makeRequest('GET', `/medication/user/${userId}`);
-    console.log('User Medications List:', userMedsRes.body);
+    console.log('User Medications List:', JSON.stringify(userMedsRes.body, null, 2));
 
     // 3. Trigger Alarm & Verification Flow (Success scenario)
     console.log('\n5️⃣ Testing Alarm Trigger & AI Photo Verification...');
@@ -79,7 +86,7 @@ async function runTestFlow() {
       patientName: googleRes.body.user.patientName,
       medicationName: barcodeRes.body.medication.name,
       caregiverPhone: '+966500000000',
-      timeoutMs: 5000 // 5 seconds for fast test
+      timeoutMs: 5000
     });
     console.log('Alarm Triggered Response:', triggerRes.body);
 
@@ -99,7 +106,7 @@ async function runTestFlow() {
       patientName: googleRes.body.user.patientName,
       medicationName: barcodeRes.body.medication.name,
       caregiverPhone: '+966500000000',
-      timeoutMs: 3000 // 3 seconds timeout
+      timeoutMs: 3000
     });
 
     console.log('Waiting 4 seconds for timeout escalation trigger...');
@@ -109,7 +116,7 @@ async function runTestFlow() {
     console.log('Status after timeout:', statusRes.body);
 
     if (statusRes.body.log && statusRes.body.log.status === 'ESCALATED') {
-      console.log('\n✅ ALL INTEGRATION TESTS (GOOGLE AUTH, BARCODE SCANNER, ESCALATION) PASSED SUCCESSFULLY!');
+      console.log('\n✅ ALL EXTENDED INTEGRATION TESTS PASSED SUCCESSFULLY!');
     } else {
       console.error('\n❌ Escalation timeout test failed!');
       process.exitCode = 1;
