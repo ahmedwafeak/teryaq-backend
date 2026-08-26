@@ -21,4 +21,7 @@ router.post('/alarm/verify-dose', alarmController.handleVerifyDose);
 router.get('/alarm/status/:doseId', alarmController.getLogStatus);
 router.get('/admin/logs', alarmController.getAllLogs);
 
+// Vercel Cron Job Endpoint
+router.get('/cron/escalate', alarmController.handleCronEscalations);
+
 module.exports = router;

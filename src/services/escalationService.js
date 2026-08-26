@@ -1,46 +1,50 @@
-// Service to handle 10-minute caregiver escalation timers
+// Service to handle 10-minute caregiver escalation timers (Database + Serverless Cron Compatible)
+const db = require('../config/db');
 
 const activeTimers = new Map();
 const doseStatusLogs = new Map();
 
 /**
  * Start a 10-minute escalation timer for a dose alarm
- * @param {string} doseId - Unique ID for the scheduled dose
- * @param {string} patientName - Patient name
- * @param {string} medicationName - Name of the required medication
- * @param {string} caregiverPhone - Caregiver contact phone
- * @param {number} timeoutMs - Timeout duration (default 10 minutes = 600,000ms, set smaller for testing if needed)
  */
-function startEscalationTimer(doseId, patientName, medicationName, caregiverPhone, timeoutMs = 10 * 60 * 1000) {
-  // Cancel any existing timer for this dose
+async function startEscalationTimer(doseId, patientName, medicationName, caregiverPhone, timeoutMs = 10 * 60 * 1000) {
   if (activeTimers.has(doseId)) {
     clearTimeout(activeTimers.get(doseId));
   }
 
-  doseStatusLogs.set(doseId, {
+  const startTime = new Date();
+  const escalatesAt = new Date(startTime.getTime() + timeoutMs);
+
+  const doseLog = {
     doseId,
     patientName,
     medicationName,
     caregiverPhone,
     status: 'ALARM_RINGING',
-    startTime: new Date().toISOString(),
+    startTime: startTime.toISOString(),
+    escalatesAt: escalatesAt.toISOString(),
     verifiedAt: null,
     escalatedAt: null
-  });
+  };
 
-  console.log(`[ESCALATION ENGINE] Started 10-minute timer for Dose ${doseId} (${medicationName} for ${patientName})`);
+  doseStatusLogs.set(doseId, doseLog);
+  await db.saveDoseLog(doseLog);
 
+  console.log(`[ESCALATION ENGINE] Started escalation tracking for Dose ${doseId} (${medicationName} for ${patientName}) - Escalates at: ${escalatesAt.toISOString()}`);
+
+  // In-Memory Timer (For local dev environment)
   const timer = setTimeout(() => {
     triggerCaregiverEscalation(doseId);
   }, timeoutMs);
 
   activeTimers.set(doseId, timer);
+  return doseLog;
 }
 
 /**
  * Cancel the escalation timer upon successful AI photo verification
  */
-function verifyDoseSuccess(doseId, confidenceScore, photoUrl = null) {
+async function verifyDoseSuccess(doseId, confidenceScore, photoUrl = null) {
   if (activeTimers.has(doseId)) {
     clearTimeout(activeTimers.get(doseId));
     activeTimers.delete(doseId);
@@ -53,24 +57,66 @@ function verifyDoseSuccess(doseId, confidenceScore, photoUrl = null) {
   log.photoUrl = photoUrl;
   doseStatusLogs.set(doseId, log);
 
-  console.log(`[ESCALATION ENGINE] ✅ Dose ${doseId} verified successfully! Timer cancelled.`);
+  await db.saveDoseLog(log);
+
+  console.log(`[ESCALATION ENGINE] ✅ Dose ${doseId} verified successfully! Timer & escalation cancelled.`);
   return log;
 }
 
 /**
  * Trigger emergency notification to caregiver when 10-minute timer expires
  */
-function triggerCaregiverEscalation(doseId) {
-  activeTimers.delete(doseId);
-  const log = doseStatusLogs.get(doseId);
-  if (!log) return;
+async function triggerCaregiverEscalation(doseId) {
+  if (activeTimers.has(doseId)) {
+    activeTimers.delete(doseId);
+  }
 
+  const log = doseStatusLogs.get(doseId) || { doseId };
   log.status = 'ESCALATED';
   log.escalatedAt = new Date().toISOString();
   doseStatusLogs.set(doseId, log);
 
-  console.error(`[EMERGENCY ESCALATION 🚨] Patient ${log.patientName} missed medication ${log.medicationName}! Alerting caregiver at ${log.caregiverPhone}...`);
-  // Here FCM High-Priority Push & Twilio SMS trigger is executed
+  await db.saveDoseLog(log);
+
+  console.error(`[EMERGENCY ESCALATION 🚨] Patient ${log.patientName || 'Patient'} missed medication ${log.medicationName || 'Medication'}! Alerting caregiver at ${log.caregiverPhone || '+966500000000'}...`);
+  // FCM High-Priority Push & Twilio SMS trigger logic
+  return log;
+}
+
+/**
+ * Process Overdue Escalations via Vercel Cron Job
+ */
+async function processCronEscalations() {
+  console.log('[CRON ENGINE ⏰] Checking for overdue unverified alarms...');
+  const overdueDoses = await db.getOverdueEscalations();
+
+  const escalatedList = [];
+  for (const dose of overdueDoses) {
+    const doseId = dose.dose_id || dose.doseId;
+    const patientName = dose.patient_name || dose.patientName;
+    const medicationName = dose.medication_name || dose.medicationName;
+    const caregiverPhone = dose.caregiver_phone || dose.caregiverPhone;
+
+    console.error(`[CRON ESCALATION 🚨] Escalating overdue dose ${doseId} for ${patientName} (${medicationName}) to caregiver ${caregiverPhone}`);
+
+    const escalatedLog = {
+      doseId,
+      patientName,
+      medicationName,
+      caregiverPhone,
+      status: 'ESCALATED',
+      escalatedAt: new Date().toISOString()
+    };
+
+    await db.saveDoseLog(escalatedLog);
+    escalatedList.push(escalatedLog);
+  }
+
+  return {
+    checkedAt: new Date().toISOString(),
+    overdueCount: overdueDoses.length,
+    escalated: escalatedList
+  };
 }
 
 function getDoseStatus(doseId) {
@@ -84,6 +130,8 @@ function getAllLogs() {
 module.exports = {
   startEscalationTimer,
   verifyDoseSuccess,
+  triggerCaregiverEscalation,
+  processCronEscalations,
   getDoseStatus,
   getAllLogs
 };
